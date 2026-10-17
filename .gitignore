@@ -1,0 +1,15 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.env
+running_coach.db
+*.sqlite
+*.sqlite3
+.DS_Store
+
+# Personal Apple Health exports contain sensitive health data.
+export.zip
+export.xml
+apple_health_export/
+*.health-export.zip
