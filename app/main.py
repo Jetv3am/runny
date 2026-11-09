@@ -10,6 +10,7 @@ import secrets
 from pathlib import Path
 
 from fastapi import FastAPI, File, Header, HTTPException, Query, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -19,6 +20,13 @@ from app.analytics import build_fitness_profile
 from app.apple_health import AppleHealthImportError, parse_apple_health_upload
 from app.config import MAX_UPLOAD_MB, MAX_XML_MB, SYNC_API_TOKEN
 from app.planner import DISTANCE_KM, DAY_NAMES, build_weekly_plan
+from app.ml.profile import build_ml_fitness_profile, fitness_profile_to_dict, fitness_profile_for_llm
+from app.ml.pace_predictor import (
+    train_pace_model, predict_next_run_pace, get_model_status,
+)
+from app.ai.coach import generate_ai_training_plan, answer_coaching_query
+from app.ai.rag import index_training_history, get_rag_status, retrieve_relevant_runs
+from app.ai.guardrails import run_guardrails
 
 class HealthKitWorkout(BaseModel):
     """One running workout sent directly from the companion iOS app."""
@@ -46,6 +54,10 @@ class RunningGoalInput(BaseModel):
     training_days: list[str] = Field(min_length=1, max_length=7, description="Available days, e.g. Monday, Wednesday, Saturday")
 
 
+class CoachingQueryInput(BaseModel):
+    query: str = Field(min_length=1, max_length=500, description="Runner's coaching question")
+
+
 app = FastAPI(
     title="Running Coach API",
     description=(
@@ -54,6 +66,14 @@ app = FastAPI(
         "No Strava account or paid API is required."
     ),
     version="0.2.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -144,12 +164,116 @@ def list_health_metrics(
     return db.list_health_metrics(limit=limit, metric_type=metric_type)
 
 
-@app.get("/fitness/profile")
-def fitness_profile(days: int = Query(default=28, ge=7, le=365)) -> dict:
-    """Calculate a deterministic recent-fitness summary from imported records."""
+@app.get("/fitness/profile/basic")
+def fitness_profile_basic(days: int = Query(default=28, ge=7, le=365)) -> dict:
+    """Legacy: basic deterministic fitness summary (no ML)."""
     activities = db.list_activities(limit=10000)
     metrics = db.list_health_metrics(limit=1000, metric_type="vo2_max")
     return build_fitness_profile(activities, metrics, days=days)
+
+
+@app.get("/fitness/profile")
+def fitness_profile_ml(days: int = Query(default=42, ge=7, le=365)) -> dict:
+    """ML-powered fitness profile with VDOT, training load, pace trends, and readiness."""
+    activities = db.list_activities(limit=10000)
+    metrics = db.list_health_metrics(limit=1000, metric_type="vo2_max")
+    goal = db.get_running_goal()
+    profile = build_ml_fitness_profile(
+        activities, metrics, goal=goal, days=days,
+    )
+    return fitness_profile_to_dict(profile)
+
+
+@app.get("/fitness/history")
+def fitness_history(days: int = Query(default=90, ge=14, le=365)) -> dict:
+    """Training load time-series data for charting (CTL/ATL/TSB over time)."""
+    activities = db.list_activities(limit=10000)
+    metrics = db.list_health_metrics(limit=1000, metric_type="vo2_max")
+    profile = build_ml_fitness_profile(activities, metrics, days=days)
+    return {
+        "period_days": days,
+        "daily_loads": profile.training_load["daily_loads"],
+        "pace_history": profile.pace_trend["pace_history"],
+        "current": {
+            "ctl_fitness": profile.training_load["ctl_fitness"],
+            "atl_fatigue": profile.training_load["atl_fatigue"],
+            "tsb_form": profile.training_load["tsb_form"],
+            "status": profile.training_load["status"],
+        },
+    }
+
+
+@app.get("/coaching/insight")
+def coaching_insight(days: int = Query(default=42, ge=7, le=365)) -> dict:
+    """Get a structured coaching insight from the ML engine.
+
+    This endpoint returns the ML-computed metrics formatted as actionable
+    coaching advice. A future version will pass this through Gemini for
+    natural-language coaching.
+    """
+    activities = db.list_activities(limit=10000)
+    metrics = db.list_health_metrics(limit=1000, metric_type="vo2_max")
+    goal = db.get_running_goal()
+    profile = build_ml_fitness_profile(
+        activities, metrics, goal=goal, days=days,
+    )
+
+    insights = []
+
+    # VDOT insight
+    vdot = profile.vdot.get("estimated_vdot")
+    if vdot:
+        insights.append({
+            "category": "fitness_level",
+            "title": "Estimated Fitness (VDOT)",
+            "value": vdot,
+            "detail": f"Your current VDOT of {vdot} places you at a "
+                       f"{profile.vdot.get('confidence', 'unknown')} confidence level.",
+        })
+
+    # Training load insight
+    status = profile.training_load.get("status")
+    tsb = profile.training_load.get("tsb_form")
+    if status:
+        status_messages = {
+            "fresh": "You're well rested. Good time to push a quality session.",
+            "optimal": "Great balance of fitness and freshness. Ready to perform.",
+            "absorbing": "You're building fitness but carrying some fatigue. Stay consistent.",
+            "overreaching": "High fatigue detected. Consider a recovery week.",
+        }
+        insights.append({
+            "category": "training_load",
+            "title": "Training Status",
+            "value": status,
+            "detail": status_messages.get(status, ""),
+            "tsb_form": tsb,
+        })
+
+    # Readiness insight
+    insights.append({
+        "category": "readiness",
+        "title": "Today's Readiness",
+        "value": profile.readiness.get("score"),
+        "label": profile.readiness.get("label"),
+        "detail": profile.readiness.get("recommendation", ""),
+    })
+
+    # Race prediction insight
+    if profile.race_prediction:
+        insights.append({
+            "category": "race_readiness",
+            "title": f"{profile.race_prediction.get('goal_name', 'Race')} Readiness",
+            "probability": profile.race_prediction.get("probability"),
+            "label": profile.race_prediction.get("probability_label"),
+            "detail": profile.race_prediction.get("assessment", ""),
+        })
+
+    return {
+        "generated_at": profile.generated_at,
+        "confidence": profile.confidence,
+        "insights": insights,
+        "data_quality": profile.data_quality,
+    }
 
 
 @app.post("/goals")
@@ -187,9 +311,9 @@ def get_goal() -> dict:
     return goal
 
 
-@app.get("/training/plan")
-def training_plan(days: int = Query(default=28, ge=7, le=365)) -> dict:
-    """Generate a conservative rule-based weekly plan from the latest goal and profile."""
+@app.get("/training/plan/basic")
+def training_plan_basic(days: int = Query(default=28, ge=7, le=365)) -> dict:
+    """Legacy: simple conservative rule-based weekly plan."""
     goal = db.get_running_goal()
     if goal is None:
         raise HTTPException(status_code=400, detail="Save a running goal first by POSTing to /goals.")
@@ -197,6 +321,28 @@ def training_plan(days: int = Query(default=28, ge=7, le=365)) -> dict:
     metrics = db.list_health_metrics(limit=1000, metric_type="vo2_max")
     profile = build_fitness_profile(activities, metrics, days=days)
     return build_weekly_plan(profile, goal)
+
+
+@app.get("/training/plan")
+def training_plan(days: int = Query(default=42, ge=7, le=365)) -> dict:
+    """Generate an adaptive weekly plan powered by ML metrics (VDOT, CTL/ATL, readiness, Daniels pace zones)."""
+    goal = db.get_running_goal()
+    if goal is None:
+        raise HTTPException(status_code=400, detail="Save a running goal first by POSTing to /goals.")
+    activities = db.list_activities(limit=10000)
+    metrics = db.list_health_metrics(limit=1000, metric_type="vo2_max")
+    profile = build_ml_fitness_profile(activities, metrics, goal=goal, days=days)
+    return generate_ai_training_plan(profile, goal)
+
+
+@app.post("/coaching/ask")
+def coaching_ask(payload: CoachingQueryInput, days: int = Query(default=42, ge=7, le=365)) -> dict:
+    """Ask the AI coach a question grounded in your current ML training metrics."""
+    activities = db.list_activities(limit=10000)
+    metrics = db.list_health_metrics(limit=1000, metric_type="vo2_max")
+    goal = db.get_running_goal()
+    profile = build_ml_fitness_profile(activities, metrics, goal=goal, days=days)
+    return answer_coaching_query(profile, payload.query)
 
 
 @app.post("/health/workouts/sync")
@@ -259,4 +405,138 @@ def sync_healthkit_workouts(
         "workouts_processed": len(activities),
         "other_workouts_ignored": 0,
         "synced_at": synced_at,
+    }
+
+
+# --- ML Model Endpoints ---
+
+@app.post("/ml/train")
+def train_ml_model() -> dict:
+    """Train the XGBoost pace prediction model on the athlete's training history.
+
+    Uses all running activities in the database. Training uses a temporal
+    train/test split to prevent data leakage. The trained model is persisted
+    to disk and used for subsequent predictions.
+    """
+    activities = db.list_activities(limit=10000)
+    result = train_pace_model(activities)
+    if result is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Insufficient data to train the model. Need at least 10 quality runs.",
+        )
+    return {
+        "status": "trained",
+        "metrics": {
+            "mae_sec_per_km": result.mae_sec_per_km,
+            "rmse_sec_per_km": result.rmse_sec_per_km,
+            "r_squared": result.r_squared,
+            "train_samples": result.train_samples,
+            "test_samples": result.test_samples,
+            "feature_count": result.feature_count,
+            "train_date": result.train_date,
+        },
+    }
+
+
+@app.get("/ml/predict/pace")
+def predict_pace() -> dict:
+    """Predict expected pace for the next run using the trained XGBoost model.
+
+    Falls back to a weighted rolling average if the model isn't trained yet.
+    """
+    activities = db.list_activities(limit=10000)
+    prediction = predict_next_run_pace(activities)
+    if prediction is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Not enough running data to make a prediction. Import more runs first.",
+        )
+    return {
+        "predicted_pace": prediction.predicted_pace_formatted,
+        "predicted_pace_sec_per_km": prediction.predicted_pace_sec_per_km,
+        "confidence_interval": prediction.confidence_interval_formatted,
+        "model_version": prediction.model_version,
+        "feature_importance": prediction.feature_importance,
+        "features_used": prediction.features_used,
+        "training_metrics": prediction.training_metrics,
+    }
+
+
+@app.get("/ml/status")
+def ml_model_status() -> dict:
+    """Check the current status and metrics of the trained ML models."""
+    return {
+        "pace_predictor": get_model_status(),
+    }
+
+
+# --- RAG Endpoints ---
+
+@app.post("/rag/index")
+def rag_index(force: bool = Query(default=False, description="Force full reindex")) -> dict:
+    """Index training history into the vector store for RAG-augmented coaching.
+
+    Incrementally adds new activities. Set force=true to rebuild from scratch.
+    """
+    activities = db.list_activities(limit=10000)
+    return index_training_history(activities, force_reindex=force)
+
+
+@app.get("/rag/status")
+def rag_status() -> dict:
+    """Check the current status of the RAG vector store."""
+    return get_rag_status()
+
+
+@app.get("/rag/search")
+def rag_search(q: str = Query(description="Search query"), n: int = Query(default=5, ge=1, le=20)) -> dict:
+    """Search the vector store for relevant past runs."""
+    results = retrieve_relevant_runs(q, n_results=n)
+    return {
+        "query": q,
+        "results": results,
+        "count": len(results),
+    }
+
+
+# --- Guardrails Endpoint ---
+
+@app.post("/guardrails/validate")
+def validate_plan(days: int = Query(default=42, ge=7, le=365)) -> dict:
+    """Generate a training plan and return detailed guardrail validation results.
+
+    Useful for debugging and evaluating the safety of AI-generated plans.
+    """
+    goal = db.get_running_goal()
+    if goal is None:
+        raise HTTPException(status_code=400, detail="Save a running goal first by POSTing to /goals.")
+    activities = db.list_activities(limit=10000)
+    metrics = db.list_health_metrics(limit=1000, metric_type="vo2_max")
+    profile = build_ml_fitness_profile(activities, metrics, goal=goal, days=days)
+
+    plan = generate_ai_training_plan(profile, goal)
+
+    # Run full guardrails independently
+    guardrail_result = run_guardrails(
+        plan=plan,
+        current_weekly_km=float(profile.training_load.get("total_trimp_7d", 0)) * 0.15,
+        pace_zones=profile.vdot.get("pace_zones") or {},
+        vdot=profile.vdot.get("estimated_vdot"),
+        goal=goal,
+        readiness_score=int(profile.readiness.get("score") or 70),
+    )
+
+    return {
+        "plan": plan,
+        "guardrails": {
+            "is_safe": guardrail_result.is_safe,
+            "violations": [
+                {"category": v.category, "severity": v.severity,
+                 "field": v.field, "message": v.message, "auto_fixed": v.auto_fixed}
+                for v in guardrail_result.violations
+            ],
+            "validation_time_ms": guardrail_result.validation_time_ms,
+        },
+        "corrected_plan": guardrail_result.corrected_plan,
     }

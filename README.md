@@ -4,16 +4,24 @@ A local-first FastAPI project that imports running workouts and VO₂ max sample
 
 Current features:
 
-- Import Apple's `export.zip` or the `export.xml` inside it.
-- Keep running workouts only; ignore unrelated workout types.
-- Extract workout date, duration, distance, calories, and heart-rate summary statistics when present.
-- Import VO₂ max samples when present in the export.
-- Save records to SQLite with stable IDs so re-importing the same file doesn't duplicate rows.
-- Calculate a simple fitness profile from recent history.
-- Interactive API documentation at `/docs`.
-- Optional direct sync from a native iOS companion app using HealthKit background delivery.
+- **Apple Health Data Import**: Import `export.zip` or `export.xml` with automatic stream parsing.
+- **Machine Learning Physiology Engine**:
+  - **Jack Daniels VDOT Estimation**: Quantifies current aerobic fitness from quality running efforts with exponential decay weighting.
+  - **Daniels Training Pace Zones**: Exact paces for Easy, Marathon, Threshold/Tempo, Interval, and Repetition efforts.
+  - **Banister Impulse-Response Training Load**: Chronic Training Load (CTL / Fitness), Acute Training Load (ATL / Fatigue), and Training Stress Balance (TSB / Form).
+  - **Cardiac-Adjusted Pace Trends**: Linear regression on pace normalized by heart rate to measure aerobic decoupling and fitness trajectory.
+  - **Readiness Scoring (0–100)**: Daily readiness guidance derived from TSB form, recovery intervals, and volume ratios.
+  - **Race Time & Probability Predictor**: Estimates achievement likelihood for 5K, 10K, Half, and Marathon goals.
+- **AI & Adaptive Plan Generator**:
+  - Prescribes weekly running workouts calibrated to the runner's exact VDOT pace zones and readiness state.
+  - Supports Google Gemini API (`gemini-2.0-flash`) with structured output, alongside a zero-dependency algorithmic fallback.
+  - Interactive AI Coach Chat answering questions grounded in the runner's real workout numbers.
+- **Rich Web Dashboard**:
+  - Live readiness ring meter and coach briefing banner.
+  - Interactive SVG training load chart (CTL vs. ATL vs. TSB).
+  - VDOT pace zones and race prediction table with instant Metric/Imperial toggle.
+  - Interactive AI Coach chat drawer.
 
-This is the data foundation, not yet an AI coach or a personalized training prescription.
 
 ## 1. Set up
 
@@ -73,6 +81,13 @@ To test without using personal health data, upload `sample_data/apple_health_sam
 | `GET` | `/activities?limit=100` | List imported runs |
 | `GET` | `/health/metrics?metric_type=vo2_max` | List imported metrics |
 | `GET` | `/fitness/profile?days=28` | Calculate current fitness summary |
+| `POST` | `/ml/train` | Train XGBoost pace prediction model on historical runs |
+| `GET` | `/ml/predict/pace` | Predict next run pace with confidence interval & feature importances |
+| `GET` | `/ml/status` | Check XGBoost model status and training evaluation metrics |
+| `POST` | `/rag/index` | Index training history into ChromaDB vector store |
+| `GET` | `/rag/status` | Inspect ChromaDB vector store index status |
+| `GET` | `/rag/search?q=...` | Semantic search over athlete's workout history |
+| `POST` | `/guardrails/validate` | Validate training plans against physiological safety rules |
 
 ## 5. Optional: automatic workout sync from iPhone (HealthKit)
 

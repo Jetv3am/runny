@@ -13,3 +13,13 @@ export.zip
 export.xml
 apple_health_export/
 *.health-export.zip
+
+# ML model artifacts
+models/
+*.joblib
+
+# RAG vector store
+vector_store/
+
+# LLM audit logs
+logs/

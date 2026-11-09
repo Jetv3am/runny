@@ -46,20 +46,28 @@ def _normalise_date(value: str | None) -> str | None:
     """Convert Apple's timestamp (usually with a numeric timezone) to UTC ISO 8601."""
     if not value:
         return None
-    candidate = value.strip().replace(" ", "T", 1)
-    try:
-        parsed = datetime.fromisoformat(candidate)
-    except ValueError:
-        # Tolerate a trailing Z or a few common variants in hand-made exports.
+    raw = value.strip()
+    parsed = None
+    # Common Apple Health format: '2026-10-10 07:00:00 -0700'
+    for fmt in ("%Y-%m-%d %H:%M:%S %z", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S%z"):
         try:
-            parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+            parsed = datetime.strptime(raw, fmt)
+            break
         except ValueError:
-            return None
+            pass
+    if parsed is None:
+        candidate = raw.replace(" ", "T", 1)
+        try:
+            parsed = datetime.fromisoformat(candidate)
+        except ValueError:
+            try:
+                parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+            except ValueError:
+                return None
     if parsed.tzinfo is None:
-        # Apple exports normally include an offset. Treat an absent offset as UTC,
-        # rather than silently interpreting it in the server's local timezone.
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
 
 
 def _convert_duration(value: str | None, unit: str | None) -> float | None:
@@ -121,6 +129,22 @@ def _is_running(activity_type: str | None) -> bool:
     return value == "running" or value.endswith("activitytyperunning") or value.endswith("runningindoor") or value.endswith("runningoutdoor")
 
 
+def _parse_hr_value(value: str | None) -> float | None:
+    """Extract a numeric heart rate (bpm) from strings like '155 count/min' or '155 bpm'."""
+    if not value:
+        return None
+    import re
+    m = re.search(r"([0-9]+(?:\.[0-9]+)?)", str(value))
+    if m:
+        try:
+            num = float(m.group(1))
+            if 30.0 <= num <= 250.0:
+                return round(num, 1)
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
 def _workout_to_activity(elem: ET.Element) -> dict | None:
     activity_type = elem.attrib.get("workoutActivityType", "")
     if not _is_running(activity_type):
@@ -137,17 +161,32 @@ def _workout_to_activity(elem: ET.Element) -> dict | None:
     stat_distance_m = None
 
     for child in elem:
-        if _local_tag(child.tag) != "WorkoutStatistics":
-            continue
-        stat_type = child.attrib.get("type", "")
-        if "HeartRate" in stat_type:
-            average_hr = _float_or_none(child.attrib.get("average"))
-            minimum_hr = _float_or_none(child.attrib.get("minimum"))
-            maximum_hr = _float_or_none(child.attrib.get("maximum"))
-        elif "DistanceWalkingRunning" in stat_type or "RunningDistance" in stat_type:
-            stat_distance_m = _convert_distance(
-                child.attrib.get("sum"), child.attrib.get("unit")
-            )
+        tag = _local_tag(child.tag)
+        if tag == "WorkoutStatistics":
+            stat_type = child.attrib.get("type", "")
+            if "HeartRate" in stat_type:
+                if average_hr is None:
+                    average_hr = _float_or_none(child.attrib.get("average"))
+                if minimum_hr is None:
+                    minimum_hr = _float_or_none(child.attrib.get("minimum"))
+                if maximum_hr is None:
+                    maximum_hr = _float_or_none(child.attrib.get("maximum"))
+            elif "DistanceWalkingRunning" in stat_type or "RunningDistance" in stat_type:
+                stat_distance_m = _convert_distance(
+                    child.attrib.get("sum"), child.attrib.get("unit")
+                )
+        elif tag == "MetadataEntry":
+            key = (child.attrib.get("key") or "").strip().lower().replace("_", "").replace(" ", "")
+            val = child.attrib.get("value")
+            if "averageheartrate" in key or "avgheartrate" in key:
+                if average_hr is None:
+                    average_hr = _parse_hr_value(val)
+            elif "maxheartrate" in key or "maximumheartrate" in key:
+                if maximum_hr is None:
+                    maximum_hr = _parse_hr_value(val)
+            elif "minheartrate" in key or "minimumheartrate" in key:
+                if minimum_hr is None:
+                    minimum_hr = _parse_hr_value(val)
 
     distance_m = _convert_distance(
         elem.attrib.get("totalDistance"), elem.attrib.get("totalDistanceUnit")
@@ -155,13 +194,18 @@ def _workout_to_activity(elem: ET.Element) -> dict | None:
     if distance_m is None:
         distance_m = stat_distance_m
 
+
+    raw_start = (elem.attrib.get("startDate") or "").strip()
+    local_day = raw_start[:10] if len(raw_start) >= 10 else start_date[:10]
+
     return {
         "id": f"apple_health_{_stable_id(start_date, end_date, activity_type, elem.attrib.get('sourceName'), distance_m)}",
         "source": "apple_health",
-        "name": f"Run — {start_date[:10]}",
+        "name": f"Run — {local_day}",
         "type": "Running",
         "start_date": start_date,
         "end_date": end_date,
+
         "distance_m": distance_m,
         "duration_s": _convert_duration(
             elem.attrib.get("duration"), elem.attrib.get("durationUnit")
