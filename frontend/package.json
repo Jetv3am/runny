@@ -1,0 +1,33 @@
+{
+  "name": "frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "next typegen && tsc --noEmit",
+    "gen:api": "mkdir -p node_modules/.cache && (cd ../backend && uv run python -m coach.export_openapi) > node_modules/.cache/openapi.json && openapi-typescript node_modules/.cache/openapi.json -o src/lib/api/schema.d.ts"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.107.1",
+    "lucide-react": "^1.71.0",
+    "next": "16.4.6",
+    "openapi-fetch": "^0.17.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "recharts": "^3.10.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/turbopack": "4.3.3",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.6",
+    "openapi-typescript": "^7.13.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "^5"
+  }
+}

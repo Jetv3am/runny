@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens - the ONLY place colours are defined. Ramp-inspired: warm neutral
+ * canvas, white surfaces, hairline borders, near-black ink, lime used sparingly.
+ * Contrast (WCAG 2.2 AA) noted per token; never use `accent` for text or lines.
+ */
+@theme {
+  --color-canvas: #f6f6f4;        /* app background */
+  --color-surface: #ffffff;       /* panels, cards */
+  --color-ink: #121212;           /* primary text: 18.1:1 on surface */
+  --color-ink-muted: #666666;     /* secondary text: 5.7:1 surface, 5.3:1 canvas */
+  --color-line: #e7e7e4;          /* hairline borders/dividers (decorative) */
+  --color-line-strong: #c9c9c4;   /* input borders */
+  --color-hover: #f1f1ee;         /* row/item hover */
+
+  --color-accent: #e4f222;        /* Ramp-style lime: backgrounds/fills only, ink text on top (16:1) */
+  --color-accent-soft: #f5fac6;   /* insight banners */
+
+  --color-positive: #157f3c;      /* 5.2:1 on surface */
+  --color-positive-soft: #e7f5ec;
+  --color-negative: #b42318;      /* 6.5:1 */
+  --color-negative-soft: #fdecea;
+  --color-warning: #8a5a00;       /* 5.6:1 */
+  --color-warning-soft: #fdf3dc;
+  --color-info: #1d4ed8;          /* 6.7:1 */
+  --color-info-soft: #e8eefc;
+
+  /* Chart series (graphical objects need >= 3:1 against white) */
+  --color-chart-primary: #121212;
+  --color-chart-secondary: #7a7a7a; /* 4.3:1 */
+  --color-chart-accent-fill: #e4f222;
+  --color-chart-accent-stroke: #6f7d00; /* 4.4:1 - outlines lime fills */
+  --color-chart-grid: #ececea;
+
+  --shadow-hairline: 0 1px 2px rgb(18 18 18 / 0.04);
+}
+
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  @apply bg-canvas font-sans text-[14px] text-ink antialiased;
+  font-feature-settings: "ss01", "cv11";
+}
+
+/* Visible, consistent keyboard focus everywhere (WCAG 2.4.7 / 2.4.11).
+   Must live in the base layer: unlayered CSS beats Tailwind's layered utilities, which
+   would stop components that draw their own focus ring (chat input) from opting out. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

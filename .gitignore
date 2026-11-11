@@ -14,12 +14,16 @@ export.xml
 apple_health_export/
 *.health-export.zip
 
-# ML model artifacts
-models/
-*.joblib
-
-# RAG vector store
-vector_store/
-
-# LLM audit logs
-logs/
+# v2: databases, trained models, uploads, tool caches
+*.db
+# SQLite WAL side-files hold real (health) data too
+*.db-wal
+*.db-shm
+# Local database + transient uploads (backend/data/coach.db, backend/data/uploads/)
+backend/data/
+artifacts/
+uploads/
+node_modules/
+.pytest_cache/
+.ruff_cache/
+.wibey-tasks/
