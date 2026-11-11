@@ -1,0 +1,47 @@
+[project]
+name = "running-coach"
+version = "0.1.0"
+description = "Running Coach v2 API - Apple Health ingestion, physiology analytics, ML predictions, AI coach."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+    "pydantic>=2.7",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "defusedxml>=0.7",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "httpx2",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/coach"]
+
+[tool.uv]
+allow-insecure-host = ["pypi.ci.artifacts.walmart.com"]
+
+[[tool.uv.index]]
+name = "walmart-pypi"
+url = "https://pypi.ci.artifacts.walmart.com/artifactory/api/pypi/external-pypi/simple"
+default = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]  # lets tests import shared helpers as `tests.export_builder`
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
