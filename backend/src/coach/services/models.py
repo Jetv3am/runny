@@ -15,6 +15,7 @@ from datetime import date, timedelta
 from coach.domain.fitness import Performance, race_quality_performances
 from coach.domain.history import DailyHistory, daily_history
 from coach.ml import registry
+from coach.ml.diagnostics import EffortReport, explain
 from coach.ml.features import Baseline, Example, baseline_before, build_examples, feature_row
 from coach.ml.race_model import MIN_EXAMPLES, RaceTimeModel, select
 from coach.schemas import ModelCard, ModelScore
@@ -42,6 +43,13 @@ def _inputs() -> tuple[list[Performance], DailyHistory | None]:
 def examples() -> list[Example]:
     performances, history = _inputs()
     return build_examples(performances, history) if history else []
+
+
+def effort_report() -> EffortReport:
+    """Every candidate effort and why it was (or wasn't) used for training."""
+    workouts = repository.get_workouts()
+    return explain(workouts, repository.get_best_efforts(), repository.get_profile(),
+                   daily_history(workouts, repository.today()))
 
 
 def train() -> ModelCard:
