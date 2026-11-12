@@ -33,7 +33,23 @@ class Split:
     distance_m: float
     duration_s: float
     avg_hr: int | None
-    elevation_delta_m: float
+    elevation_delta_m: float | None  # None: the samples carry no elevation
+
+    @property
+    def pace_s_per_km(self) -> float:
+        return pace_s_per_km(self.distance_m, self.duration_s)
+
+
+@dataclass(frozen=True, slots=True)
+class BestEffort:
+    """Fastest stretch of one standard distance inside one run (or the whole race)."""
+    workout_id: str
+    day: date
+    distance_key: str
+    label: str
+    distance_m: float
+    duration_s: float
+    avg_hr: int | None
 
     @property
     def pace_s_per_km(self) -> float:

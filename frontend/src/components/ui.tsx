@@ -5,6 +5,10 @@ import { WORKOUT_TYPES } from "@/lib/workout-types";
 
 /* ---------- Layout ---------------------------------------------------------- */
 
+/** Cell styles for dense, hairline-divided tables that sit inside a `flush` Card. */
+export const TABLE_HEAD = "px-5 py-2.5 text-[12px] font-medium text-ink-muted";
+export const TABLE_CELL = "px-5 py-3";
+
 export function PageHeader({ title, description, actions, eyebrow }: {
   title: string;
   description?: React.ReactNode;

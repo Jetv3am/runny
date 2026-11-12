@@ -5,10 +5,11 @@ from __future__ import annotations
 from datetime import timedelta
 
 from coach.domain.plan import PlannedSession, generate_plan
-from coach.domain.vdot import race_time_for_vdot, training_paces
+from coach.domain.vdot import training_paces
 from coach.schemas import GoalOut, PlannedSessionOut, PlanWeekOut, SessionStatus, TrainingPlan
 from coach.services import repository
 from coach.services.fitness import current_vdot
+from coach.services.predictions import predicted_time_s
 from coach.services.workouts import weekly_volume
 
 
@@ -46,11 +47,12 @@ def current_plan() -> TrainingPlan:
             completed_workout_id=completed_id,
         )
 
+    predicted = predicted_time_s(goal.distance_m)  # same model as the Predictions page
     return TrainingPlan(
         goal=GoalOut(
             race_label=goal.race_label, distance_m=goal.distance_m, race_date=goal.race_date,
             target_time_s=goal.target_time_s,
-            predicted_time_s=round(race_time_for_vdot(vdot, goal.distance_m)) if vdot else None,
+            predicted_time_s=round(predicted) if predicted else None,
         ),
         generator="rules",
         weeks=[PlanWeekOut(index=w.index, start_date=w.start, phase=w.phase,

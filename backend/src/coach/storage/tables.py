@@ -5,12 +5,14 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 
 from sqlalchemy import (
+    JSON,
     Date,
     DateTime,
     Float,
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     TypeDecorator,
@@ -78,6 +80,37 @@ class WorkoutRow(Base):
     avg_cadence: Mapped[float | None] = mapped_column(Float, nullable=True)
     temperature_c: Mapped[float | None] = mapped_column(Float, nullable=True)
     indoor: Mapped[bool] = mapped_column(default=False)
+
+
+class WorkoutStreamRow(Base):
+    """Distance and heart rate over active time for one run (see storage/stream_codec).
+    No GPS coordinates are stored: splits and efforts don't need them."""
+
+    __tablename__ = "workout_streams"
+
+    workout_id: Mapped[str] = mapped_column(
+        ForeignKey("workouts.id", ondelete="CASCADE"), primary_key=True)
+    sample_count: Mapped[int] = mapped_column(Integer)
+    data: Mapped[bytes] = mapped_column(LargeBinary)
+
+
+class ModelVersionRow(Base):
+    """One training run of an ML model, kept even when it wasn't promoted, so the app
+    can always explain why it is (or isn't) using ML."""
+
+    __tablename__ = "model_versions"
+    __table_args__ = (Index("ix_model_versions_task_trained_at", "task", "trained_at"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    task: Mapped[str] = mapped_column(String(32))  # race_time
+    # active | retired | rejected (baseline was better) | insufficient_data
+    status: Mapped[str] = mapped_column(String(24))
+    trained_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    examples: Mapped[int] = mapped_column(Integer)
+    algorithm: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    artifact: Mapped[str | None] = mapped_column(String(255), nullable=True)  # file name
+    artifact_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class HealthMetricRow(Base):

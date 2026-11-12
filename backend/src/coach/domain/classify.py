@@ -1,7 +1,7 @@
 """Infer what kind of run a workout was, and the athlete profile, from raw Apple Health data.
 
-Apple doesn't label runs as tempo/long/etc., so these are heuristics on distance and
-heart-rate intensity. Provisional: Phase 2 refines them with pace and HR samples.
+Apple doesn't label runs as tempo/long/etc., so these are heuristics on distance,
+heart-rate intensity and - when per-run samples exist - how much the pace varied.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import statistics
 from collections.abc import Sequence
 
+from coach.domain.distances import RACES, StandardDistance
 from coach.domain.models import AthleteProfile, WorkoutType
 
 WORKOUT_TITLES: dict[WorkoutType, str] = {
@@ -20,17 +21,19 @@ WORKOUT_TITLES: dict[WorkoutType, str] = {
     WorkoutType.RACE: "Race",
 }
 
-# Standard race distances (m) and labels. GPS usually reads a little long, never much short.
-RACE_DISTANCES: dict[float, str] = {5_000: "5K", 10_000: "10K", 21_097.5: "Half Marathon",
-                                    42_195: "Marathon"}
+# GPS/watch distance usually reads a little long, never much short.
 _RACE_TOLERANCE = (-0.01, 0.04)
 
 # Heart-rate reserve fractions (Karvonen) separating intensity bands.
 HRR_RACE = 0.85
-HRR_INTERVAL = 0.86
+HRR_INTERVAL = 0.86  # used only when pace samples are missing
 HRR_TEMPO = 0.76
 HRR_RECOVERY = 0.62
 HRR_LONG_CEILING = 0.82  # a "long run" that's harder than this is really a workout
+# Pace variability (coefficient of variation of 200 m segment speeds): steady runs sit
+# around 0.03-0.08, hilly ones ~0.10; reps with jog recoveries are 0.2+.
+INTERVAL_PACE_CV = 0.15
+HRR_VARIABLE_INTERVAL = 0.70  # fartlek-ish swings at easy effort aren't a session
 
 LONG_RUN_FACTOR = 1.5  # relative to the athlete's median run
 LONG_RUN_MIN_M = 8_000
@@ -47,13 +50,17 @@ PLAUSIBLE_MAX_HR = (120, 220)
 MAX_PEAK_OVER_AVG = 1.25
 
 
+def race_distance(distance_m: float) -> StandardDistance | None:
+    """The standard race this distance matches (allowing for GPS drift), else None."""
+    low, high = _RACE_TOLERANCE
+    return next((race for race in RACES
+                 if race.metres * (1 + low) <= distance_m <= race.metres * (1 + high)), None)
+
+
 def race_label(distance_m: float) -> str | None:
     """'5K', '10K', ... if the distance matches a standard race, else None."""
-    low, high = _RACE_TOLERANCE
-    for standard, label in RACE_DISTANCES.items():
-        if standard * (1 + low) <= distance_m <= standard * (1 + high):
-            return label
-    return None
+    race = race_distance(distance_m)
+    return race.label if race else None
 
 
 def heart_rate_reserve(avg_hr: float, profile: AthleteProfile) -> float:
@@ -61,19 +68,27 @@ def heart_rate_reserve(avg_hr: float, profile: AthleteProfile) -> float:
 
 
 def classify_run(distance_m: float, avg_hr: float | None, profile: AthleteProfile,
-                 median_distance_m: float) -> WorkoutType:
+                 median_distance_m: float, pace_cv: float | None = None) -> WorkoutType:
+    """`pace_cv`: pace variability from the run's samples; None if it has none."""
     is_long = distance_m >= max(LONG_RUN_FACTOR * median_distance_m, LONG_RUN_MIN_M)
-    if avg_hr is None:  # no HR: distance is all we have
+    is_variable = pace_cv is not None and pace_cv >= INTERVAL_PACE_CV
+    if avg_hr is None:  # no HR: distance and pace shape are all we have
+        if is_variable:
+            return WorkoutType.INTERVAL
         return WorkoutType.LONG if is_long else WorkoutType.EASY
 
     hrr = heart_rate_reserve(avg_hr, profile)
+    # Checked before races: an interval session can total exactly 10 km at race-like
+    # average HR, but races are run at a steady pace.
+    if is_variable and hrr >= HRR_VARIABLE_INTERVAL:
+        return WorkoutType.INTERVAL
     if hrr >= HRR_RACE and race_label(distance_m):
         return WorkoutType.RACE
     if is_long and hrr < HRR_LONG_CEILING:
         return WorkoutType.LONG
-    if hrr >= HRR_INTERVAL:
+    if hrr >= HRR_INTERVAL and pace_cv is None:  # no samples: intensity is the only clue
         return WorkoutType.INTERVAL
-    if hrr >= HRR_TEMPO:
+    if hrr >= HRR_TEMPO:  # steady and hard
         return WorkoutType.TEMPO
     if hrr < HRR_RECOVERY and distance_m < RECOVERY_FACTOR * median_distance_m:
         return WorkoutType.RECOVERY

@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { api, unwrap, unwrapOptional, type ImportRecord, type WorkoutType } from "./client";
 
@@ -64,6 +64,35 @@ export function useRacePredictions() {
   return useQuery({
     queryKey: ["predictions", "race"],
     queryFn: () => unwrapOptional(api.GET("/api/v1/predictions/race")),
+  });
+}
+
+export function usePersonalBests() {
+  return useQuery({
+    queryKey: ["fitness", "personal-bests"],
+    queryFn: () => unwrap(api.GET("/api/v1/fitness/personal-bests")),
+  });
+}
+
+const RACE_MODEL_KEY = ["models", "race-time"];
+
+export function useRaceModel() {
+  return useQuery({
+    queryKey: RACE_MODEL_KEY,
+    queryFn: () => unwrap(api.GET("/api/v1/models/race-time")),
+  });
+}
+
+/** Retrain now. Predictions and the goal race may switch model, so both refresh. */
+export function useRetrainRaceModel() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => unwrap(api.POST("/api/v1/models/race-time/train")),
+    onSuccess: (card) => {
+      queryClient.setQueryData(RACE_MODEL_KEY, card);
+      void queryClient.invalidateQueries({ queryKey: ["predictions"] });
+      void queryClient.invalidateQueries({ queryKey: ["plans"] });
+    },
   });
 }
 

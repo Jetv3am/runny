@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from coach import __version__, config
-from coach.api import analytics, interactive
+from coach.api import analytics, interactive, models
 from coach.services import imports
 from coach.storage import database
 
@@ -34,6 +34,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(analytics.router, prefix=API_PREFIX)
     app.include_router(interactive.router, prefix=API_PREFIX)
+    app.include_router(models.router, prefix=API_PREFIX)
     return app
 
 

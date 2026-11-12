@@ -1,6 +1,8 @@
 "use client";
 
 import { FlaskConical } from "lucide-react";
+import { ModelCard } from "@/components/model-card";
+import { PersonalBests } from "@/components/personal-bests";
 import { PredictionStrip } from "@/components/prediction-card";
 import { Card, PageHeader, Pill, QueryState, Stat, StatGroup } from "@/components/ui";
 import { useCurrentPlan, useRacePredictions } from "@/lib/api/hooks";
@@ -12,9 +14,9 @@ const SOURCE_LABEL = {
 } as const;
 
 const STEPS = [
-  { title: "Estimate VDOT", body: "From your recent race efforts, weighting newer races more heavily." },
+  { title: "Estimate VDOT", body: "From your races, plus training runs where your heart rate shows race-level effort. Recent ones count more." },
   { title: "Convert", body: "Daniels' equations turn that VDOT into equivalent times for every distance." },
-  { title: "Personalise · Phase 3", body: "An ML model learns how you differ from the formula. It replaces the baseline only if it's more accurate on your own races." },
+  { title: "Personalise", body: "A personal model learns how you differ from the formula. It's used only if it's more accurate on your own efforts it hasn't seen." },
 ];
 
 export function PredictionsView() {
@@ -42,6 +44,10 @@ export function PredictionsView() {
           </>
         )}
       </QueryState>
+
+      <ModelCard className="mt-8" />
+
+      <PersonalBests className="mt-8" />
 
       <QueryState query={plan}>
         {({ goal }) => {

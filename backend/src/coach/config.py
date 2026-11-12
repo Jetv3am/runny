@@ -30,6 +30,13 @@ def uploads_dir() -> Path:
     return path
 
 
+def models_dir() -> Path:
+    """Trained model files (personal: derived from your health data)."""
+    path = data_dir() / "models"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def database_url() -> str:
     return os.environ.get("COACH_DATABASE_URL", f"sqlite:///{data_dir() / 'coach.db'}")
 

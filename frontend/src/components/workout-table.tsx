@@ -4,10 +4,7 @@ import Link from "next/link";
 import type { WorkoutSummary } from "@/lib/api/client";
 import { formatDate, formatDuration } from "@/lib/format";
 import { useFormat } from "@/lib/units";
-import { TypeBadge } from "@/components/ui";
-
-const TH = "px-5 py-2.5 text-[12px] font-medium text-ink-muted";
-const TD = "px-5 py-3";
+import { TABLE_CELL as TD, TABLE_HEAD as TH, TypeBadge } from "@/components/ui";
 
 /** Dense, hairline-divided table. Designed to sit edge-to-edge inside a `flush` Card. */
 export function WorkoutTable({ workouts, caption }: { workouts: WorkoutSummary[]; caption: string }) {

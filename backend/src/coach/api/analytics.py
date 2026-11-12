@@ -13,6 +13,7 @@ from coach.schemas import (
     FitnessSummary,
     HealthMetric,
     HealthStatus,
+    PersonalBest,
     RacePredictions,
     TrainingPaces,
     TrainingPlan,
@@ -24,7 +25,8 @@ from coach.services import fitness, plans, predictions, repository, workouts
 
 router = APIRouter()
 
-NO_EFFORTS = "No recent race efforts yet. Import data or log a race to unlock this."
+NO_EFFORTS = ("No recent race-quality efforts yet. Import data with a race, or a hard run "
+              "recorded with heart rate, to unlock this.")
 
 
 @router.get("/health", response_model=HealthStatus, tags=["system"])
@@ -65,6 +67,12 @@ def training_paces() -> TrainingPaces:
     if paces is None:
         raise HTTPException(status_code=404, detail=NO_EFFORTS)
     return paces
+
+
+@router.get("/fitness/personal-bests", response_model=list[PersonalBest], tags=["fitness"])
+def personal_bests() -> list[PersonalBest]:
+    """Fastest 1K, mile, 5K, 10K, half and marathon found inside any run."""
+    return fitness.personal_bests()
 
 
 @router.get("/metrics/daily", response_model=list[DailyMetric], tags=["fitness"])

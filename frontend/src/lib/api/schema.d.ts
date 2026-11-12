@@ -106,6 +106,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/fitness/personal-bests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Personal Bests
+         * @description Fastest 1K, mile, 5K, 10K, half and marathon found inside any run.
+         */
+        get: operations["personal_bests_api_v1_fitness_personal_bests_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/metrics/daily": {
         parameters: {
             query?: never;
@@ -213,10 +233,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/models/race-time": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Race Time Model
+         * @description Whether predictions use the personal ML model, and how it scored vs VDOT.
+         */
+        get: operations["race_time_model_api_v1_models_race_time_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/models/race-time/train": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Train Race Time Model
+         * @description Retrain now (also happens automatically after each import). Takes seconds.
+         */
+        post: operations["train_race_time_model_api_v1_models_race_time_train_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** BestEffortOut */
+        BestEffortOut: {
+            /** Workout Id */
+            workout_id: string;
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Duration S */
+            duration_s: number;
+            /** Pace S Per Km */
+            pace_s_per_km: number;
+            /** Avg Hr */
+            avg_hr: number | null;
+        };
         /** Body_create_import_api_v1_imports_post */
         Body_create_import_api_v1_imports_post: {
             /** File */
@@ -375,6 +451,60 @@ export interface components {
              */
             created_at: string;
         };
+        /**
+         * ModelCard
+         * @description Why the app is (or isn't) using ML, with walk-forward test scores.
+         */
+        ModelCard: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "demo" | "not_trained" | "collecting_data" | "baseline_better" | "active";
+            /**
+             * Efforts
+             * @description Race-quality efforts available to learn from
+             */
+            efforts: number;
+            /** Efforts Needed */
+            efforts_needed: number;
+            /** Version */
+            version?: string | null;
+            /** Algorithm */
+            algorithm?: string | null;
+            /** Trained At */
+            trained_at?: string | null;
+            /**
+             * Test Efforts
+             * @description Efforts scored on unseen data
+             */
+            test_efforts?: number | null;
+            ml?: components["schemas"]["ModelScore"] | null;
+            /** @description VDOT alone, same test efforts */
+            baseline?: components["schemas"]["ModelScore"] | null;
+            /**
+             * Band Coverage Pct
+             * @description How often actual times landed inside the p10-p90 band (aim: 80)
+             */
+            band_coverage_pct?: number | null;
+            /** Data From */
+            data_from?: string | null;
+            /** Data To */
+            data_to?: string | null;
+        };
+        /** ModelScore */
+        ModelScore: {
+            /**
+             * Mape Pct
+             * @description Mean absolute % error of predicted race times
+             */
+            mape_pct: number;
+            /**
+             * Mae S
+             * @description Mean absolute error, seconds
+             */
+            mae_s: number;
+        };
         /** PaceZoneOut */
         PaceZoneOut: {
             /** Key */
@@ -387,6 +517,18 @@ export interface components {
             fast_s_per_km: number;
             /** Slow S Per Km */
             slow_s_per_km: number;
+        };
+        /** PersonalBest */
+        PersonalBest: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Distance M */
+            distance_m: number;
+            all_time: components["schemas"]["BestEffortOut"] | null;
+            /** @description Best of the last 90 days */
+            recent: components["schemas"]["BestEffortOut"] | null;
         };
         /** PlanWeekOut */
         PlanWeekOut: {
@@ -468,6 +610,11 @@ export interface components {
             /** Based On */
             based_on: string;
             /**
+             * Model Version
+             * @description Set when source is 'ml'
+             */
+            model_version: string | null;
+            /**
              * Generated At
              * Format: date-time
              */
@@ -488,7 +635,7 @@ export interface components {
             /** Avg Hr */
             avg_hr: number | null;
             /** Elevation Delta M */
-            elevation_delta_m: number;
+            elevation_delta_m: number | null;
         };
         /** TrainingPaces */
         TrainingPaces: {
@@ -779,6 +926,26 @@ export interface operations {
             };
         };
     };
+    personal_bests_api_v1_fitness_personal_bests_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonalBest"][];
+                };
+            };
+        };
+    };
     daily_metrics_api_v1_metrics_daily_get: {
         parameters: {
             query?: {
@@ -963,6 +1130,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    race_time_model_api_v1_models_race_time_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelCard"];
+                };
+            };
+        };
+    };
+    train_race_time_model_api_v1_models_race_time_train_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelCard"];
                 };
             };
         };
