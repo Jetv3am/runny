@@ -507,6 +507,39 @@ Each phase ends in something runnable and demo-able.
 > profile are *derived* at read time (`domain/classify.py`, heuristic until Phase 2).
 > The demo athlete is now only the fallback before the first import.
 > Not yet: splits/best efforts (need GPX + HR samples, Phase 2), user-set goals (Phase 4).
+>
+> **Progress (2026-11-10):** Phase 2 done. A second parser pass (`ingestion/samples.py`)
+> collects the watch's `DistanceWalkingRunning` and heart-rate records inside each run,
+> strips paused time, picks one recording source (no iPhone+Watch double counting), and
+> stores a compact per-run stream (`workout_streams`, float32 + zlib, migration 2).
+> **Deviation from the plan:** splits come from these watch samples, *not* GPX routes.
+> They exist for treadmill runs and bare `export.xml` uploads, match Apple's totals,
+> and mean no GPS coordinates (home location) are ever stored. GPX can follow if route
+> maps are wanted. `domain/streams.py` derives splits, best efforts (exact sliding
+> window), and pace variability (detects intervals vs steady runs) at read time.
+> VDOT now also counts training efforts run at race heart rate. New: Personal bests
+> card, splits on real workouts. Perf: 153 MB export with 523 sampled runs imports in
+> ~7 s (both passes), ~60 MB peak. `daily_metrics` persistence skipped: still fast.
+> Follow-ups: lap/segment view for intervals (km splits blur reps); elevation per split.
+>
+> **Progress (2026-11-11):** Phase 3 done. `coach/ml/`: `features.py` (8 as-of features,
+> target = log(actual / VDOT-predicted), baseline itself computed from efforts *before*
+> the day: no leakage), `evaluate.py` (walk-forward, day-grouped blocks, MAPE/MAE, band
+> coverage judged only on past errors), `race_model.py` (Ridge + HistGradientBoosting
+> with monotonic constraints; promotion = beats VDOT MAPE by >=5% with >=12 efforts),
+> `registry.py` (`model_versions`, migration 3; joblib file + SHA-256 verified before
+> load). Trains after every import, via Retrain button / `POST /models/race-time/train`,
+> or `uv run python -m coach.ml train|status`. Goal race now uses the same predictor.
+> Model card on /predictions. Synthetic athlete via real import: VDOT 5.7% -> ML 2.15%
+> MAPE, 84% band coverage, ~2.4 s import+train; pure noise is correctly *not* promoted.
+> **Deviations:** corrections vs VDOT (not Riegel); split-conformal bands from
+> walk-forward errors instead of quantile models (n is small); scikit-learn's
+> HistGradientBoosting instead of XGBoost/LightGBM (same monotonic + no extra deps);
+> each run re-scores all candidates on current data, so "beat the active model" is
+> implicit; models live in `data/models/` (gitignored), no `user_id` (single user);
+> fitness-trajectory ML deferred (YAGNI until race-time works on real data).
+> Next: train on a real export; optional general model from a public dataset (offline
+> pipeline feeding the same features; it would replace VDOT as the baseline).
 
 ## 18. What Happens to v1 Code
 

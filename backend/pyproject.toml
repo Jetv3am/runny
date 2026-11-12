@@ -11,6 +11,8 @@ dependencies = [
     "sqlalchemy>=2.0",
     "alembic>=1.13",
     "defusedxml>=0.7",
+    "numpy>=2.0",
+    "scikit-learn>=1.5",
 ]
 
 [dependency-groups]
@@ -27,12 +29,12 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/coach"]
 
-[tool.uv]
-allow-insecure-host = ["pypi.ci.artifacts.walmart.com"]
-
+# Public PyPI, stated explicitly so uv.lock works for anyone who clones the repo.
+# Project settings beat personal ones: a company mirror in ~/.config/uv/uv.toml
+# would otherwise make uv rewrite every lock URL on that machine.
 [[tool.uv.index]]
-name = "walmart-pypi"
-url = "https://pypi.ci.artifacts.walmart.com/artifactory/api/pypi/external-pypi/simple"
+name = "pypi"
+url = "https://pypi.org/simple"
 default = true
 
 [tool.pytest.ini_options]

@@ -9,8 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from coach.ingestion.apple_export import ExportError, parse_export
+from coach.ingestion.apple_export import parse_export
 from coach.ingestion.cleaning import drop_duplicate_recordings
+from coach.ingestion.export_reader import ExportError
 from tests.export_builder import Run, export_xml, export_zip, record
 
 FIXTURES = Path(__file__).parent / "fixtures"

@@ -3,7 +3,9 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, FileArchive, Loader2, UploadCloud } from "lucide-react";
 import { useId, useRef, useState } from "react";
-import { Card, EmptyState, PageHeader, Pill, QueryState, TextLink } from "@/components/ui";
+import {
+  Card, EmptyState, PageHeader, Pill, QueryState, TABLE_CELL as TD, TABLE_HEAD as TH, TextLink,
+} from "@/components/ui";
 import type { ImportRecord } from "@/lib/api/client";
 import { useImports } from "@/lib/api/hooks";
 import { API_ORIGIN } from "@/lib/api/origin";
@@ -43,8 +45,6 @@ const STEPS = [
   "Tap “Export All Health Data” and confirm.",
   "AirDrop export.zip to this computer and drop it here.",
 ];
-
-const TH = "px-5 py-2.5 text-[12px] font-medium text-ink-muted";
 
 /** Feedback for the file just uploaded: importing -> complete (with a way out) or failed. */
 function JobBanner({ job }: { job: ImportRecord }) {
@@ -192,15 +192,15 @@ export function ImportView() {
               <tbody>
                 {records.map((r) => (
                   <tr key={r.id} className="border-b border-line last:border-0">
-                    <td className="px-5 py-3 text-ink-muted">
+                    <td className={`${TD} text-ink-muted`}>
                       {formatDate(r.created_at, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                     </td>
-                    <td className="px-5 py-3">
+                    <td className={TD}>
                       <p className="font-medium text-ink">{r.filename}</p>
                       <p className="text-[13px] text-ink-muted">{r.message}</p>
                     </td>
-                    <td className="px-5 py-3 text-right tabular-nums text-ink">{formatBytes(r.size_bytes)}</td>
-                    <td className="px-5 py-3 text-right"><ImportStatus record={r} /></td>
+                    <td className={`${TD} text-right tabular-nums text-ink`}>{formatBytes(r.size_bytes)}</td>
+                    <td className={`${TD} text-right`}><ImportStatus record={r} /></td>
                   </tr>
                 ))}
               </tbody>

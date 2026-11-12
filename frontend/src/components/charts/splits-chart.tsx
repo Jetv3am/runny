@@ -23,16 +23,19 @@ export function SplitsChart({ workout }: { workout: WorkoutDetail }) {
   const summary = fastest
     ? `${splits.length} splits. Fastest was split ${fastest.index} at ${f.pace(fastest.pace_s_per_km)}.`
     : "No split data for this workout.";
+  // Watch distance samples carry no elevation: skip the column rather than show dashes.
+  const hasElevation = workout.splits.some((s) => s.elevation_delta_m != null);
+  const signed = (m: number) => `${m > 0 ? "+" : ""}${m} m`;
 
   return (
     <ChartFrame
       title="Splits"
       summary={summary}
       table={{
-        columns: ["Split", "Distance", "Pace", "Avg HR", "Elevation"],
+        columns: ["Split", "Distance", "Pace", "Avg HR", ...(hasElevation ? ["Elevation"] : [])],
         rows: workout.splits.map((s) => [
           s.index, f.distance(s.distance_m, 2), f.pace(s.pace_s_per_km), s.avg_hr ?? "–",
-          `${s.elevation_delta_m > 0 ? "+" : ""}${s.elevation_delta_m} m`,
+          ...(hasElevation ? [s.elevation_delta_m != null ? signed(s.elevation_delta_m) : "–"] : []),
         ]),
       }}
     >

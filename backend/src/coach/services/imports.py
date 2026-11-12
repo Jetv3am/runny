@@ -1,9 +1,10 @@
 """Apple Health import jobs.
 
 1. `receive_upload` streams the upload to disk and records an import (status: processing).
-2. `run_import` (background thread) parses it, cleans it, and stores everything in ONE
-   transaction, so the dashboard never shows a half-imported export.
-3. The raw upload is deleted afterwards; only the extracted runs and metrics are kept.
+2. `run_import` (background thread) reads it in two passes - runs and daily metrics, then
+   the samples inside each run - and stores everything in ONE transaction, so the
+   dashboard never shows a half-imported export.
+3. The raw upload is deleted afterwards; only the extracted data is kept.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path, PurePath
 
@@ -19,18 +20,25 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.sqlite import insert
 
 from coach import config
-from coach.ingestion.apple_export import ExportError, ParsedMetric, ParsedWorkout, parse_export
+from coach.domain.streams import Stream
+from coach.ingestion.apple_export import ParsedMetric, ParsedWorkout, parse_export
 from coach.ingestion.cleaning import drop_duplicate_recordings
+from coach.ingestion.export_reader import ExportError, ProgressFn
+from coach.ingestion.samples import collect_streams
 from coach.schemas import ImportRecord
-from coach.services import repository
+from coach.services import models, repository
+from coach.storage import stream_codec
 from coach.storage.database import session_scope
-from coach.storage.tables import HealthMetricRow, ImportRow, WorkoutRow
+from coach.storage.tables import HealthMetricRow, ImportRow, WorkoutRow, WorkoutStreamRow
 
 log = logging.getLogger(__name__)
 
 ALLOWED_SUFFIXES = frozenset({".zip", ".xml"})
 MAX_UPLOAD_BYTES = 4 * 1024**3  # 4 GiB
-PARSE_SHARE = 95.0  # progress % allotted to parsing; storing takes the rest
+# Progress bar spans (percent) for the two passes; storing + training take the last 5%.
+WORKOUT_PASS = (0.0, 45.0)
+SAMPLE_PASS = (45.0, 95.0)
+TRAINING_PROGRESS = 97.0  # storing, then the (seconds-long) model training
 PROGRESS_EVERY_S = 1.0
 HISTORY_LIMIT = 20
 
@@ -80,33 +88,43 @@ async def receive_upload(filename: str, chunks: AsyncIterator[bytes]) -> ImportR
 # ---------- Background job --------------------------------------------------------
 
 class _ProgressReporter:
-    """Writes parse progress to the import row, at most once per PROGRESS_EVERY_S."""
+    """Writes progress to the import row, at most once per PROGRESS_EVERY_S."""
 
     def __init__(self, import_id: str):
         self._import_id = import_id
         self._last_write = 0.0
 
-    def __call__(self, fraction: float) -> None:
-        now = time.monotonic()
-        if now - self._last_write < PROGRESS_EVERY_S:
-            return
-        self._last_write = now
-        _update(self._import_id, progress=round(fraction * PARSE_SHARE, 1),
-                message="Reading your export…")
+    def stage(self, span: tuple[float, float], message: str) -> ProgressFn:
+        """Callback mapping one pass's 0..1 progress onto `span` (percent) of the bar."""
+        start, end = span
+
+        def report(fraction: float) -> None:
+            now = time.monotonic()
+            if now - self._last_write < PROGRESS_EVERY_S:
+                return
+            self._last_write = now
+            _update(self._import_id, progress=round(start + fraction * (end - start), 1),
+                    message=message)
+        return report
 
 
 def run_import(import_id: str) -> None:
     """Parse and store one upload. Runs in a worker thread; never raises."""
     path = _upload_path(import_id)
+    progress = _ProgressReporter(import_id)
     try:
-        result = parse_export(path, on_progress=_ProgressReporter(import_id))
+        result = parse_export(path, progress.stage(WORKOUT_PASS, "Reading your runs…"))
         workouts = drop_duplicate_recordings(result.workouts)
-        new_runs = _store(import_id, workouts, result.metrics)
+        streams = collect_streams(path, workouts,
+                                  progress.stage(SAMPLE_PASS, "Reading splits and heart rate…"))
+        new_runs = _store(import_id, workouts, result.metrics, streams)
         repository.invalidate()
+        _update(import_id, progress=TRAINING_PROGRESS, message="Training your prediction model…")
+        models.train_after_import()
         _finish(import_id, "completed", _summary(
-            runs=len(workouts), new_runs=new_runs, metrics=len(result.metrics),
-            duplicates=len(result.workouts) - len(workouts)))
-        log.info("Import %s done: %s", import_id, result.stats)
+            runs=len(workouts), new_runs=new_runs, with_splits=len(streams),
+            metrics=len(result.metrics), duplicates=len(result.workouts) - len(workouts)))
+        log.info("Import %s done: %s, %d streams", import_id, result.stats, len(streams))
     except ExportError as exc:
         _finish(import_id, "failed", str(exc))
     except Exception:
@@ -118,7 +136,7 @@ def run_import(import_id: str) -> None:
 
 
 def _store(import_id: str, workouts: Sequence[ParsedWorkout],
-           metrics: Sequence[ParsedMetric]) -> int:
+           metrics: Sequence[ParsedMetric], streams: Mapping[str, Stream]) -> int:
     """Upsert everything in a single transaction. Returns how many runs are new.
     Re-importing the same export is a no-op thanks to stable workout ids."""
     with session_scope() as session:
@@ -130,6 +148,15 @@ def _store(import_id: str, workouts: Sequence[ParsedWorkout],
                 stmt.on_conflict_do_update(index_elements=["id"],
                                            set_={c: stmt.excluded[c] for c in columns}),
                 [_workout_values(import_id, w) for w in workouts])
+        if streams:
+            stmt = insert(WorkoutStreamRow)
+            session.execute(
+                stmt.on_conflict_do_update(
+                    index_elements=["workout_id"],
+                    set_={c: stmt.excluded[c] for c in ("sample_count", "data")}),
+                [{"workout_id": workout_id, "data": stream_codec.encode(stream),
+                  "sample_count": stream.t_s.size + stream.hr_t_s.size}
+                 for workout_id, stream in streams.items()])
         if metrics:
             stmt = insert(HealthMetricRow)
             session.execute(
@@ -154,10 +181,12 @@ def _workout_values(import_id: str, w: ParsedWorkout) -> dict[str, object]:
     }
 
 
-def _summary(*, runs: int, new_runs: int, metrics: int, duplicates: int) -> str:
+def _summary(*, runs: int, new_runs: int, with_splits: int, metrics: int,
+             duplicates: int) -> str:
     if runs == 0:
         return "No running workouts found in this export."
-    parts = [f"Imported {runs:,} runs ({new_runs:,} new) and {metrics:,} daily health readings."]
+    parts = [f"Imported {runs:,} runs ({new_runs:,} new) and {metrics:,} daily health readings.",
+             f"{with_splits:,} runs have splits."]
     if duplicates:
         parts.append(f"Merged {duplicates:,} duplicate recordings from other apps.")
     return " ".join(parts)

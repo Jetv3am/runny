@@ -34,7 +34,7 @@ class SplitOut(Schema):
     duration_s: float
     pace_s_per_km: float
     avg_hr: int | None
-    elevation_delta_m: float
+    elevation_delta_m: float | None
 
 
 class WorkoutSummary(Schema):
@@ -120,6 +120,22 @@ class TrainingPaces(Schema):
     zones: list[PaceZoneOut]
 
 
+class BestEffortOut(Schema):
+    workout_id: str
+    date: date
+    duration_s: float
+    pace_s_per_km: float
+    avg_hr: int | None
+
+
+class PersonalBest(Schema):
+    key: str
+    label: str
+    distance_m: float
+    all_time: BestEffortOut | None
+    recent: BestEffortOut | None = Field(description="Best of the last 90 days")
+
+
 # --- Predictions --------------------------------------------------------------
 
 class RacePrediction(Schema):
@@ -136,8 +152,34 @@ class RacePredictions(Schema):
     source: Literal["vdot_baseline", "ml"]
     vdot: float
     based_on: str
+    model_version: str | None = Field(description="Set when source is 'ml'")
     generated_at: datetime
     predictions: list[RacePrediction]
+
+
+ModelStatus = Literal["demo", "not_trained", "collecting_data", "baseline_better", "active"]
+
+
+class ModelScore(Schema):
+    mape_pct: float = Field(description="Mean absolute % error of predicted race times")
+    mae_s: float = Field(description="Mean absolute error, seconds")
+
+
+class ModelCard(Schema):
+    """Why the app is (or isn't) using ML, with walk-forward test scores."""
+    status: ModelStatus
+    efforts: int = Field(description="Race-quality efforts available to learn from")
+    efforts_needed: int
+    version: str | None = None
+    algorithm: str | None = None
+    trained_at: datetime | None = None
+    test_efforts: int | None = Field(None, description="Efforts scored on unseen data")
+    ml: ModelScore | None = None
+    baseline: ModelScore | None = Field(None, description="VDOT alone, same test efforts")
+    band_coverage_pct: float | None = Field(
+        None, description="How often actual times landed inside the p10-p90 band (aim: 80)")
+    data_from: date | None = None
+    data_to: date | None = None
 
 
 # --- Plans --------------------------------------------------------------------

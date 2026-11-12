@@ -1,35 +1,41 @@
-"""Fitness analytics: training load series, current VDOT, readiness, pace zones."""
+"""Fitness analytics: training load series, current VDOT, readiness, pace zones, PBs."""
 
 from __future__ import annotations
 
-from datetime import timedelta
+from collections.abc import Sequence
+from datetime import date, timedelta
 
 from coach.domain import training_load as tl
-from coach.domain.fitness import estimate_vdot
+from coach.domain.distances import BEST_EFFORTS
+from coach.domain.fitness import estimate_vdot, race_quality_performances
+from coach.domain.history import daily_history
+from coach.domain.models import BestEffort
 from coach.domain.vdot import training_paces as compute_paces
-from coach.schemas import DailyMetric, FitnessSummary, HealthMetric, PaceZoneOut, TrainingPaces
+from coach.schemas import (
+    BestEffortOut,
+    DailyMetric,
+    FitnessSummary,
+    HealthMetric,
+    PaceZoneOut,
+    PersonalBest,
+    TrainingPaces,
+)
 from coach.services import repository
 from coach.services.workouts import weekly_volume
+
+RECENT_PB_DAYS = 90
 
 
 def _full_daily_series() -> list[DailyMetric]:
     """Daily metrics from the first workout through today (load needs full history)."""
-    workouts = repository.get_workouts()
-    today = repository.today()
-    if not workouts:
+    history = daily_history(repository.get_workouts(), repository.today())
+    if history is None:
         return []
-    by_day: dict = {}
-    for w in workouts:
-        distance, load = by_day.get(w.day, (0.0, 0.0))
-        by_day[w.day] = (distance + w.distance_m, load + w.trimp)
-    first = workouts[0].day
-    days = [first + timedelta(days=i) for i in range((today - first).days + 1)]
-    totals = [by_day.get(d, (0.0, 0.0)) for d in days]
-    loads = tl.training_load([t for _, t in totals])
     return [
-        DailyMetric(date=d, distance_m=round(dist, 1), trimp=round(trimp, 1),
-                    ctl=round(p.ctl, 1), atl=round(p.atl, 1), tsb=round(p.tsb, 1))
-        for d, (dist, trimp), p in zip(days, totals, loads, strict=True)
+        DailyMetric(date=d, distance_m=round(float(dist), 1), trimp=round(float(load), 1),
+                    ctl=round(float(c), 1), atl=round(float(a), 1), tsb=round(float(b), 1))
+        for d, dist, load, c, a, b in zip(history.days, history.distance_m, history.trimp,
+                                          history.ctl, history.atl, history.tsb, strict=True)
     ]
 
 
@@ -43,8 +49,37 @@ def health_metrics(metric_type: str | None = None) -> list[HealthMetric]:
             if metric_type is None or s.type == metric_type]
 
 
+def vdot_on(day: date) -> float | None:
+    performances = race_quality_performances(
+        repository.get_workouts(), repository.get_best_efforts(), repository.get_profile())
+    return estimate_vdot(performances, day)
+
+
 def current_vdot() -> float | None:
-    return estimate_vdot(repository.get_workouts(), repository.today())
+    return vdot_on(repository.today())
+
+
+def personal_bests() -> list[PersonalBest]:
+    """Per standard distance: the all-time best and the best of the last 90 days."""
+    efforts = repository.get_best_efforts()
+    cutoff = repository.today() - timedelta(days=RECENT_PB_DAYS)
+    bests = []
+    for standard in BEST_EFFORTS:
+        at_distance = [e for e in efforts if e.distance_key == standard.key]
+        bests.append(PersonalBest(
+            key=standard.key, label=standard.label, distance_m=standard.metres,
+            all_time=_fastest(at_distance),
+            recent=_fastest([e for e in at_distance if e.day >= cutoff])))
+    return bests
+
+
+def _fastest(efforts: Sequence[BestEffort]) -> BestEffortOut | None:
+    if not efforts:
+        return None
+    best = min(efforts, key=lambda e: e.duration_s)
+    return BestEffortOut(workout_id=best.workout_id, date=best.day,
+                         duration_s=best.duration_s, pace_s_per_km=round(best.pace_s_per_km, 1),
+                         avg_hr=best.avg_hr)
 
 
 def training_paces() -> TrainingPaces | None:
@@ -80,7 +115,7 @@ def summary() -> FitnessSummary:
 
     today = repository.today()
     vdot_now = current_vdot()
-    vdot_then = estimate_vdot(repository.get_workouts(), today - timedelta(days=28))
+    vdot_then = vdot_on(today - timedelta(days=28))
     weeks = weekly_volume(5)
     this_week, previous = weeks[-1], weeks[:-1]
     avg_4w = sum(w.distance_m for w in previous) / len(previous)

@@ -21,6 +21,9 @@ export type TrainingPlan = Schemas["TrainingPlan"];
 export type PlanWeek = Schemas["PlanWeekOut"];
 export type PlannedSession = Schemas["PlannedSessionOut"];
 export type ImportRecord = Schemas["ImportRecord"];
+export type PersonalBest = Schemas["PersonalBest"];
+export type BestEffort = Schemas["BestEffortOut"];
+export type ModelCard = Schemas["ModelCard"];
 export type ChatMessage = Schemas["ChatMessage"];
 
 export class ApiError extends Error {

@@ -2,12 +2,16 @@
 
 Serves imported Apple Health data. Until the first import it falls back to the
 synthetic demo athlete, so the UI is never empty.
+
+Everything interpretive (run type, title, load, best efforts) is derived here at read
+time, so improving an algorithm never requires re-importing.
 """
 
 from __future__ import annotations
 
 import statistics
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from datetime import date, timedelta, timezone
 from functools import lru_cache
 
@@ -19,20 +23,24 @@ from coach.domain.classify import (
     ASSUMED_HRR_WITHOUT_HR,
     classify_run,
     derive_profile,
+    race_distance,
     run_title,
 )
-from coach.domain.models import AthleteProfile, Goal, HealthSample, Workout
+from coach.domain.models import AthleteProfile, BestEffort, Goal, HealthSample, Workout
+from coach.domain.streams import Stream, best_efforts, pace_variability, splits, stream_from_splits
 from coach.domain.training_load import trimp
 from coach.schemas import DataSource
+from coach.storage import stream_codec
 from coach.storage.database import session_scope
-from coach.storage.tables import HealthMetricRow, WorkoutRow
+from coach.storage.tables import HealthMetricRow, WorkoutRow, WorkoutStreamRow
 
 
 @dataclass(frozen=True, slots=True)
 class _Snapshot:
     profile: AthleteProfile
-    workouts: tuple[Workout, ...]  # oldest first
+    workouts: tuple[Workout, ...]  # oldest first; splits are attached on demand
     health: tuple[HealthSample, ...]
+    efforts: tuple[BestEffort, ...]
 
 
 def today() -> date:
@@ -53,6 +61,9 @@ def _imported() -> _Snapshot | None:
             return None
         metrics = session.scalars(
             select(HealthMetricRow).order_by(HealthMetricRow.day)).all()
+        # Raw series are only needed to derive small results; they're not kept.
+        streams = {s.workout_id: stream_codec.decode(s.data)
+                   for s in session.scalars(select(WorkoutStreamRow))}
 
     health = tuple(HealthSample(day=m.day, type=m.type, value=m.value, unit=m.unit)
                    for m in metrics)
@@ -62,13 +73,15 @@ def _imported() -> _Snapshot | None:
         workout_heart_rates=[(r.avg_hr, r.max_hr) for r in rows if r.avg_hr and r.max_hr],
     )
     median_distance = statistics.median(r.distance_m for r in rows)
-    return _Snapshot(profile=profile,
-                     workouts=tuple(_to_workout(r, profile, median_distance) for r in rows),
-                     health=health)
+    workouts = tuple(_to_workout(r, profile, median_distance, streams.get(r.id)) for r in rows)
+    return _Snapshot(profile=profile, workouts=workouts, health=health,
+                     efforts=_all_efforts(workouts, streams))
 
 
-def _to_workout(row: WorkoutRow, profile: AthleteProfile, median_distance_m: float) -> Workout:
-    workout_type = classify_run(row.distance_m, row.avg_hr, profile, median_distance_m)
+def _to_workout(row: WorkoutRow, profile: AthleteProfile, median_distance_m: float,
+                stream: Stream | None) -> Workout:
+    pace_cv = pace_variability(stream) if stream else None
+    workout_type = classify_run(row.distance_m, row.avg_hr, profile, median_distance_m, pace_cv)
     reserve = profile.max_hr - profile.resting_hr
     load_hr = row.avg_hr or profile.resting_hr + ASSUMED_HRR_WITHOUT_HR * reserve
     local_tz = timezone(timedelta(minutes=row.utc_offset_min))
@@ -87,15 +100,39 @@ def _to_workout(row: WorkoutRow, profile: AthleteProfile, median_distance_m: flo
         temperature_c=row.temperature_c,
         trimp=round(trimp(row.duration_s, load_hr, profile.resting_hr, profile.max_hr,
                           profile.sex_factor), 1),
-        # Splits need per-second samples (GPX + HR records): Phase 2.
     )
+
+
+def _all_efforts(workouts: tuple[Workout, ...],
+                 streams: Mapping[str, Stream]) -> tuple[BestEffort, ...]:
+    return tuple(effort for w in workouts for effort in _efforts_in(w, streams.get(w.id)))
+
+
+def _efforts_in(workout: Workout, stream: Stream | None) -> list[BestEffort]:
+    """Fastest stretch of each standard distance in the run. A race without samples
+    still counts once, as a whole, at its standard distance."""
+    if stream is not None:
+        return [BestEffort(workout.id, workout.day, e.distance.key, e.distance.label,
+                           e.distance.metres, e.duration_s, e.avg_hr)
+                for e in best_efforts(stream)]
+    race = race_distance(workout.distance_m) if workout.is_race else None
+    if race is None:
+        return []
+    return [BestEffort(workout.id, workout.day, race.key, race.label, race.metres,
+                       workout.duration_s, workout.avg_hr)]
+
+
+def _load_stream(workout_id: str) -> Stream | None:
+    with session_scope() as session:
+        row = session.get(WorkoutStreamRow, workout_id)
+        return stream_codec.decode(row.data) if row else None
 
 
 def _rounded(value: float | None) -> int | None:
     return round(value) if value is not None else None
 
 
-# ---------- Public API (unchanged since Phase 0) ----------------------------------
+# ---------- Public API ------------------------------------------------------------
 
 def data_source() -> DataSource:
     return "apple_health" if _imported() else "demo"
@@ -107,13 +144,24 @@ def get_profile() -> AthleteProfile:
 
 
 def get_workouts() -> tuple[Workout, ...]:
-    """All workouts, oldest first."""
+    """All workouts, oldest first (without splits: see get_workout)."""
     snapshot = _imported()
     return snapshot.workouts if snapshot else _demo_workouts(today())
 
 
 def get_workout(workout_id: str) -> Workout | None:
-    return next((w for w in get_workouts() if w.id == workout_id), None)
+    """One workout, with its splits."""
+    workout = next((w for w in get_workouts() if w.id == workout_id), None)
+    if workout is None or workout.splits or _imported() is None:
+        return workout  # demo workouts carry their splits already
+    stream = _load_stream(workout_id)
+    return replace(workout, splits=splits(stream)) if stream else workout
+
+
+def get_best_efforts() -> tuple[BestEffort, ...]:
+    """Every run's fastest stretch per standard distance, oldest first."""
+    snapshot = _imported()
+    return snapshot.efforts if snapshot else _demo_efforts(today())
 
 
 def get_health_samples() -> tuple[HealthSample, ...]:
@@ -129,6 +177,13 @@ def get_goal() -> Goal:
 @lru_cache(maxsize=2)
 def _demo_workouts(day: date) -> tuple[Workout, ...]:
     return tuple(generator.generate_workouts(day))
+
+
+@lru_cache(maxsize=2)
+def _demo_efforts(day: date) -> tuple[BestEffort, ...]:
+    workouts = _demo_workouts(day)
+    return _all_efforts(workouts, {w.id: stream_from_splits(w.splits)
+                                   for w in workouts if w.splits})
 
 
 @lru_cache(maxsize=2)
